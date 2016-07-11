@@ -3,58 +3,117 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
-	"fmt"
+	"encoding/json"
 	"log"
 	"net/http"
 	"strconv"
 
-	"github.com/julienschmidt/httprouter"
+	"github.com/gorilla/mux"
 	_ "github.com/mattn/go-sqlite3"
 )
 
 type Business struct {
-	Id         int
-	Uuid       string
-	Name       string
-	Address    string
-	Address2   string
-	City       string
-	Zip        string
-	Country    string
-	Phone      string
-	Website    string
-	Created_at string
+	Id         int    `json:"id"`
+	Uuid       string `json:"uuid"`
+	Name       string `json:"name"`
+	Address    string `json:"address"`
+	Address2   string `json:"address2"`
+	City       string `json:"city"`
+	Zip        string `json:"zip"`
+	Country    string `json:"country"`
+	Phone      string `json:"phone"`
+	Website    string `json:"website"`
+	Created_at string `json:"created_at"`
 }
 
 type Meta struct {
-	Start int	// starting id of results
-	Length int	// length of results returned
-	Total int	// total results in the database
+	Page   int // which page of results has been returned
+	Length int // length of results returned
 }
 
-var db *sql.DB
+type All struct {
+	Businesses []Business `json:"businesses"` // All businesses returned
+	Meta       Meta       `json:"meta"`       // Meta has page/length info
+}
+
+var db *sql.DB // db is a global db handle
+
+// FormatJson returns formatted json given an object
+func FormatJson(object interface{}) (out bytes.Buffer) {
+	b, err := json.Marshal(object)
+	if err != nil {
+		log.Fatal(err)
+	}
+	json.Indent(&out, b, "", "\t")
+	return
+}
 
 // GetBusiness returns a single business based on an id
-func GetBusinesses(id int) (b Business, err error) {
-	rows, err := db.Query("SELECT id,uuid,name,address,address2,city FROM businesses WHERE id=" + strconv.Itoa(id) + ";")
+func GetBusiness(id int) (b Business, err error) {
+	rows, err := db.Query("SELECT id,uuid,name,address,address2,city,zip,country,phone,website,created_at FROM businesses WHERE id=" + strconv.Itoa(id) + ";")
 	if err != nil {
 		return
 	}
 	rows.Next()
-	err = rows.Scan(&b.Id, &b.Uuid, &b.Name, &b.Address, &b.Address2, &b.City)
+	err = rows.Scan(&b.Id, &b.Uuid, &b.Name, &b.Address, &b.Address2, &b.City, &b.Zip, &b.Country, &b.Phone, &b.Website, &b.Created_at)
+	return
+}
+
+// GetBusinesses returns a single business based on an id
+func GetBusinesses(page int, length int) (bs []Business, err error) {
+	start := page * length
+	finish := page*length + length
+	rows, err := db.Query("SELECT id,uuid,name,address,address2,city,zip,country,phone,website,created_at FROM businesses WHERE id BETWEEN " +
+		strconv.Itoa(start) + " AND " + strconv.Itoa(finish) + ";")
+	if err != nil {
+		return
+	}
+
+	// Iterate through results and create list of businesses
+	for rows.Next() {
+		var b Business
+		err = rows.Scan(&b.Id, &b.Uuid, &b.Name, &b.Address, &b.Address2, &b.City, &b.Zip, &b.Country, &b.Phone, &b.Website, &b.Created_at)
+		if err != nil {
+			return
+		}
+		bs = append(bs, b)
+	}
 	return
 }
 
 // BusinessesHandler is the business end of the businesses handler.
-func BusinessesHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-	id := ps.ByName("id")
+func BusinessesHandler(w http.ResponseWriter, r *http.Request) {
+	// Handle the single id= case
+	vars := mux.Vars(r)
+	id := vars["id"]
 	if len(id) > 0 {
 		i, _ := strconv.Atoi(id)
-		b, _ := GetBusinesses(i)
-		fmt.Fprintf(w, "%+v\n", b)
+		b, _ := GetBusiness(i)
+		o := FormatJson(b)
+		o.WriteTo(w)
 		return
 	}
+
+	// Parse query params
+	length := 50
+	lengthParam := vars["length"]
+	if len(lengthParam) > 0 {
+		length, _ = strconv.Atoi(lengthParam)
+	}
+	page := 0
+	pageParam := vars["page"]
+	if len(pageParam) > 0 {
+		page, _ = strconv.Atoi(pageParam)
+	}
+
+	// Get businesses based on query and output
+	bs, _ := GetBusinesses(page, length)
+	m := Meta{Page: page, Length: length}
+	all := All{Businesses: bs, Meta: m}
+	o := FormatJson(all)
+	o.WriteTo(w)
 }
 
 func main() {
@@ -66,8 +125,10 @@ func main() {
 	}
 
 	// Serve API
-	router := httprouter.New()
-	router.GET("/businesses", BusinessesHandler)
-	router.GET("/businesses/:id", BusinessesHandler)
-	log.Fatal(http.ListenAndServe(":8080", router))
+	r := mux.NewRouter()
+	r.HandleFunc("/businesses/", BusinessesHandler).Methods("GET")
+	r.HandleFunc("/businesses", BusinessesHandler).Methods("GET").Queries("page", "{page:[0-9]+}")
+	r.HandleFunc("/businesses", BusinessesHandler).Methods("GET").Queries("length", "{length:[0-9]+}", "page", "{page:[0-9]+}")
+	r.HandleFunc("/businesses/{id:[0-9]+}", BusinessesHandler).Methods("GET")
+	log.Fatal(http.ListenAndServe(":8080", r))
 }
