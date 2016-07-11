@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"strconv"
@@ -38,7 +39,12 @@ type All struct {
 	Meta       Meta       `json:"meta"`       // Meta has page/length info
 }
 
-var db *sql.DB // db is a global db handle
+type Context struct {
+	db     *sql.DB
+	router *mux.Router
+}
+
+var SqlString string = "SELECT id,uuid,name,address,address2,city,zip,country,phone,website,created_at FROM businesses"
 
 // FormatJson returns formatted json given an object
 func FormatJson(object interface{}) (out bytes.Buffer) {
@@ -51,25 +57,35 @@ func FormatJson(object interface{}) (out bytes.Buffer) {
 }
 
 // GetBusiness returns a single business based on an id
-func GetBusiness(id int) (b Business, err error) {
-	rows, err := db.Query("SELECT id,uuid,name,address,address2,city,zip,country,phone,website,created_at FROM businesses WHERE id=" + strconv.Itoa(id) + ";")
+func (c *Context) GetBusiness(id int) (b Business, err error) {
+	rows, err := c.db.Query(SqlString + " WHERE id=" + strconv.Itoa(id) + ";")
 	if err != nil {
 		return
 	}
+	defer rows.Close()
 	rows.Next()
 	err = rows.Scan(&b.Id, &b.Uuid, &b.Name, &b.Address, &b.Address2, &b.City, &b.Zip, &b.Country, &b.Phone, &b.Website, &b.Created_at)
+	if err != nil {
+		return
+	}
+	err = rows.Err()
+	if err != nil {
+		return
+	}
+
 	return
 }
 
 // GetBusinesses returns a single business based on an id
-func GetBusinesses(page int, length int) (bs []Business, err error) {
+func (c *Context) GetBusinesses(page int, length int) (bs []Business, err error) {
 	start := page * length
-	finish := page*length + length
-	rows, err := db.Query("SELECT id,uuid,name,address,address2,city,zip,country,phone,website,created_at FROM businesses WHERE id BETWEEN " +
+	finish := page*length + length - 1
+	rows, err := c.db.Query(SqlString + " WHERE id BETWEEN " +
 		strconv.Itoa(start) + " AND " + strconv.Itoa(finish) + ";")
 	if err != nil {
 		return
 	}
+	defer rows.Close()
 
 	// Iterate through results and create list of businesses
 	for rows.Next() {
@@ -78,19 +94,31 @@ func GetBusinesses(page int, length int) (bs []Business, err error) {
 		if err != nil {
 			return
 		}
+		err = rows.Err()
+		if err != nil {
+			return
+		}
 		bs = append(bs, b)
+	}
+
+	// Catch if there are no results.
+	if len(bs) == 0 {
+		err = errors.New("No results found!")
 	}
 	return
 }
 
 // BusinessesHandler is the business end of the businesses handler.
-func BusinessesHandler(w http.ResponseWriter, r *http.Request) {
+func (c *Context) BusinessesHandler(w http.ResponseWriter, r *http.Request) {
 	// Handle the single id= case
 	vars := mux.Vars(r)
 	id := vars["id"]
 	if len(id) > 0 {
 		i, _ := strconv.Atoi(id)
-		b, _ := GetBusiness(i)
+		b, err := c.GetBusiness(i)
+		if (err != nil) || (b == Business{}) {
+			http.Error(w, err.Error(), 404)
+		}
 		o := FormatJson(b)
 		o.WriteTo(w)
 		return
@@ -109,26 +137,40 @@ func BusinessesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get businesses based on query and output
-	bs, _ := GetBusinesses(page, length)
+	bs, err := c.GetBusinesses(page, length)
+	if err != nil {
+		http.Error(w, err.Error(), 404)
+		return
+	}
+
 	m := Meta{Page: page, Length: length}
 	all := All{Businesses: bs, Meta: m}
 	o := FormatJson(all)
 	o.WriteTo(w)
 }
 
-func main() {
-	// Load database
+// SetupDatabase loads the sqlite database from the specified file
+func (c *Context) SetupDatabase() {
 	var err error
-	db, err = sql.Open("sqlite3", "businesses.sql")
+	c.db, err = sql.Open("sqlite3", "businesses.sql")
 	if err != nil {
 		panic(err)
 	}
+}
 
-	// Serve API
-	r := mux.NewRouter()
-	r.HandleFunc("/businesses/", BusinessesHandler).Methods("GET")
-	r.HandleFunc("/businesses", BusinessesHandler).Methods("GET").Queries("page", "{page:[0-9]+}")
-	r.HandleFunc("/businesses", BusinessesHandler).Methods("GET").Queries("length", "{length:[0-9]+}", "page", "{page:[0-9]+}")
-	r.HandleFunc("/businesses/{id:[0-9]+}", BusinessesHandler).Methods("GET")
-	log.Fatal(http.ListenAndServe(":8080", r))
+// SetupRoutes sets up the specific routes for the API
+func (c *Context) SetupRoutes() {
+	c.router = mux.NewRouter()
+	c.router.HandleFunc("/businesses/", c.BusinessesHandler).Methods("GET")
+	c.router.HandleFunc("/businesses", c.BusinessesHandler).Methods("GET").Queries("length", "{length:[0-9]+}", "page", "{page:[0-9]+}")
+	c.router.HandleFunc("/businesses", c.BusinessesHandler).Methods("GET").Queries("page", "{page:[0-9]+}")
+	c.router.HandleFunc("/businesses", c.BusinessesHandler).Methods("GET").Queries("length", "{length:[0-9]+}")
+	c.router.HandleFunc("/businesses/{id:[0-9]+}", c.BusinessesHandler).Methods("GET")
+}
+
+func main() {
+	c := Context{}
+	c.SetupDatabase()
+	c.SetupRoutes()
+	log.Fatal(http.ListenAndServe(":8080", c.router))
 }

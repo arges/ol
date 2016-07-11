@@ -1,5 +1,8 @@
-#!/bin/bash
-sudo apt-get install sqlite3
+#!/bin/bash -x
+set -e
+sudo apt-get install sqlite3 golang-go
+go get github.com/gorilla/mux
+go get github.com/mattn/go-sqlite3
 wget https://s3.amazonaws.com/ownlocal-engineering/engineering_project_businesses.csv.gz
 gunzip engineering_project_businesses.csv.gz
 echo '
