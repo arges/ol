@@ -161,10 +161,11 @@ func (c *Context) SetupDatabase() {
 // SetupRoutes sets up the specific routes for the API
 func (c *Context) SetupRoutes() {
 	c.router = mux.NewRouter()
-	c.router.HandleFunc("/businesses/", c.BusinessesHandler).Methods("GET")
 	c.router.HandleFunc("/businesses", c.BusinessesHandler).Methods("GET").Queries("length", "{length:[0-9]+}", "page", "{page:[0-9]+}")
 	c.router.HandleFunc("/businesses", c.BusinessesHandler).Methods("GET").Queries("page", "{page:[0-9]+}")
 	c.router.HandleFunc("/businesses", c.BusinessesHandler).Methods("GET").Queries("length", "{length:[0-9]+}")
+	c.router.HandleFunc("/businesses", c.BusinessesHandler).Methods("GET")
+	c.router.HandleFunc("/businesses/", c.BusinessesHandler).Methods("GET")
 	c.router.HandleFunc("/businesses/{id:[0-9]+}", c.BusinessesHandler).Methods("GET")
 }
 
